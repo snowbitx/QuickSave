@@ -1,8 +1,15 @@
 # QuickSave
 
+[![Release](https://img.shields.io/github/v/release/snowbitx/QuickSave)](https://github.com/snowbitx/QuickSave/releases)
+[![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-black)](https://github.com/snowbitx/QuickSave/releases)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[English](README.en.md) | 中文
+
 macOS 菜单栏小工具：随时选中一段文字，按 `⌘⌥S`，文本立即保存为 `.txt` 到 `~/docs`（目录不存在会自动创建）。也可以把剪贴板里的文本一键存为文档。
 
 保存成功后屏幕右上角会弹出提示条并伴随提示音（不依赖系统通知权限），菜单栏图标短暂变为 ✅。
+
+![QuickSave 演示](docs/demo.gif)
 
 ## 下载安装
 

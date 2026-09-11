@@ -131,6 +131,64 @@ enum Capture {
     }
 }
 
+// MARK: - 保存结果 HUD（不依赖通知权限，屏幕右上角浮现 2 秒）
+
+final class SaveHUD {
+    static let shared = SaveHUD()
+
+    private let panel: NSPanel
+    private let label: NSTextField
+    private var hideItem: DispatchWorkItem?
+
+    private init() {
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 44),
+                        styleMask: [.borderless, .nonactivatingPanel],
+                        backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.level = .statusBar
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.hasShadow = true
+        panel.isReleasedWhenClosed = false
+
+        let container = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 300, height: 44))
+        container.material = .popover
+        container.state = .active
+        container.wantsLayer = true
+        container.layer?.cornerRadius = 12
+
+        label = NSTextField(labelWithString: "")
+        label.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        label.lineBreakMode = .byTruncatingMiddle
+        label.frame = NSRect(x: 14, y: 13, width: 272, height: 18)
+        container.addSubview(label)
+        panel.contentView = container
+    }
+
+    /// 必须在主线程调用
+    func show(_ text: String, success: Bool) {
+        label.stringValue = text
+        label.textColor = success ? .labelColor : .systemRed
+        guard let screen = NSScreen.main else { return }
+        let vf = screen.visibleFrame
+        let size = panel.frame.size
+        panel.setFrameOrigin(NSPoint(x: vf.maxX - size.width - 12, y: vf.maxY - size.height - 8))
+        panel.alphaValue = 1
+        panel.orderFrontRegardless()
+
+        hideItem?.cancel()
+        let item = DispatchWorkItem { [weak panel] in
+            guard let panel else { return }
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.4
+                panel.animator().alphaValue = 0
+            }, completionHandler: { panel.orderOut(nil) })
+        }
+        hideItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: item)
+    }
+}
+
 // MARK: - 应用主体
 
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
@@ -141,6 +199,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var iconResetWorkItem: DispatchWorkItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 单实例：若已有 QuickSave 在运行，结束旧的，自己接管菜单栏
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: "com.wangxiaoyu.quicksave")
+            .filter { $0 != NSRunningApplication.current }
+        others.forEach { $0.terminate() }
+
         AppDelegate.shared = self
         NSApplication.shared.setActivationPolicy(.accessory)
 
@@ -162,6 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     private func setupStatusItem() {
         statusItem.button?.title = "📄"
+        statusItem.button?.toolTip = "QuickSave 运行中 · 选中文字按 ⌘⌥S 保存"
         rebuildMenu()
     }
 
@@ -201,6 +265,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let ax = NSMenuItem(title: "授权辅助功能权限…", action: #selector(promptAccessibilityFromMenu), keyEquivalent: "")
         ax.target = self
         menu.addItem(ax)
+
+        let notif = NSMenuItem(title: "通知设置…", action: #selector(openNotificationSettings), keyEquivalent: "")
+        notif.target = self
+        menu.addItem(notif)
 
         menu.addItem(.separator())
 
@@ -251,16 +319,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         promptForAccessibility()
     }
 
+    @objc private func openNotificationSettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.notifications") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     // MARK: 捕捉与保存
 
     func captureAndSave() {
         DispatchQueue.global(qos: .userInitiated).async {
             guard AXIsProcessTrusted() else {
-                DispatchQueue.main.async { self.promptForAccessibility() }
+                DispatchQueue.main.async {
+                    self.promptForAccessibility()
+                    SaveHUD.shared.show("⚠️ 请先在系统设置中授权辅助功能", success: false)
+                    NSSound(named: "Basso")?.play()
+                }
                 return
             }
             let sourceApp = NSWorkspace.shared.frontmostApplication?.localizedName ?? "未知应用"
             guard let captured = Capture.captureSelectedText() else {
+                DispatchQueue.main.async {
+                    SaveHUD.shared.show("未捕获到选中文本，请先选中文字再按 ⌘⌥S", success: false)
+                    NSSound(named: "Basso")?.play()
+                }
                 self.notify(title: "未捕获到选中文本", body: "请先选中文字，再按 ⌘⌥S（部分应用不支持抓取）")
                 return
             }
@@ -284,6 +366,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             self.lastSavedName = url.lastPathComponent
             self.rebuildMenu()
             self.flashIcon("✅")
+            SaveHUD.shared.show("✅ 已保存：\(url.lastPathComponent)", success: true)
+            NSSound(named: "Pop")?.play()
         }
         let via = viaClipboard ? "（经剪贴板抓取）" : ""
         notify(title: "已保存到 ~/\(directoryName)", body: "\(url.lastPathComponent)\(via) 来自 \(source)")
